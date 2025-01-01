@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wargame Realtime</title>
+    <script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
+    <style>
+        /*GENERAL SETTINGS */
+        body {
+            font-family: Arial, sans-serif;
+        }
+        #controls {
+            margin-bottom: 10px;
+        }
+        /* MAP SETTINGS */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(69, 10px); 
+            grid-template-rows: repeat(97, 10px); 
+            gap: 0;
+        }
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(90, 10px); 
+            grid-template-rows: repeat(60, 10px); 
+            gap: 0;
+        }
+        #map2 {
+            position: relative; /* Maintain stacking context */
+            width: calc(69 * 10px); /* Grid width: columns * cell width */
+            height: calc(97 * 10px); /* Grid height: rows * cell height */
+            background: url('assets/SITMAP.PNG') no-repeat center center;
+            background-size: 100% 100%; /* Scale background to exactly fit the grid */
+            z-index: 1; /* Ensure background is on top */
+        }
+        #map3 {
+            position: relative;
+            width: calc(90 * 10px); /* Grid width: columns * cell width */
+            height: calc(60 * 10px); /* Grid height: rows * cell height */
+            background: url('assets/ZOOMED.PNG') no-repeat center center;
+            background-size: 100% 100%; /* Ensure it fits the smaller grid */
+            z-index: 1;
+        }
+        .cell {
+            width: 10px; /* Adjusted for fine control */
+            height: 10px; /* Adjusted for fine control */
+            border: 1px transparent; /*solid #eee;/*
+            background-color: rgba(255, 255, 255, 0.02); /* Semi-transparent background */
+            box-sizing: border-box;
+        }
+        .terrain-0 {
+            background-color: transparent;
+        }
+        .terrain-1 {
+            background-color: black;
+        }
+        .unit {
+            background-color: blue;
+            border-radius: 50%;
+            width: 8px; /* Slightly smaller to fit within 10x10 cells */
+            height: 8px;
+            margin: 1px;
+            box-sizing: border-box;
+        }
+        .enemy {
+            background-color: red;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+        .obstacle {
+            background-color: green;
+            width: 8px;
+            height: 8px;
+            margin: 1px;
+            transform: rotate(45deg); /* Rotate to make it a diamond */
+            box-sizing: border-box;
+        }
+        .hidden-enemy, .hidden-obstacle {
+            opacity: 0.05;  /* Faintly visible under fog */
+        }
+        .revealed {
+            opacity: 1;  /* Fully visible */
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <label for="unitSelect">Select Unit:</label>
+        <select id="unitSelect" onchange="selectUnit(event)">
+            <!-- Units will be dynamically added here -->
+        </select>
+        <button onclick="toggleMap('map2')">Sit Map</button>
+        <button onclick="toggleMap('map3')">Blown Up</button>
+    </div>
+    <div id="map-container">
+        <div id="map2" class="grid"></div>
+        <div id="map3" class="grid grid-3" style="display: none;"></div>
+    </div>
+    <button onclick="drawGrid(map2, terrain2, unitsMap2, enemiesMap2, obstaclesMap2)">Force Redraw</button>
+
+    <script>
+        const ably = new Ably.Realtime('em7Wyg.H8O4rg:4Zet6ARSR2M29dmCaWRSSG3X118esjfVse1DwbMt2OY');
+            ably.connection.on('connected', () => {
+                console.log('Ably is connected!');
+                });
+            ably.connection.on('failed', (err) => {
+                console.error('Ably connection failed:', err);
+                });
+            const channel = ably.channels.get('map2');
+        
+        //create broadcast channel
+        const gameevent = ably.channels.get('game-event');
+        //const gmupdates = ably.channels.get('gm-update');
+        
+        // Terrain and Units Data
+        const terrain2 = Array(97).fill(null).map(() => Array(69).fill(0));
+
+        const terrain3 = Array(60).fill(null).map(() => Array(90).fill(0));
+
+        const unitsMap2 = [
+            { id: "11A", x: 54, y: 12 }, 
+            { id: '11', x: 55, y: 12 },
+            { id: '11M', x: 56, y: 13 }, 
+            { id: '11B', x: 57, y: 13 },
+            { id: '11C', x: 58, y: 14 }, 
+            { id: '11S', x: 59, y: 14 },
+            { id: '19', x: 60, y: 15 },
+            { id: '12', x: 61, y: 15 },
+            { id: '18', x: 62, y: 16 }, 
+            { id: '13', x: 63, y: 16 },
+            { id: '17', x: 64, y: 17 },
+        ];
+
+        const unitsMap3 = [
+            { id: '11A', x: 1, y: 1 }, 
+            { id: '11', x: 2, y: 1 },
+            { id: '11M', x: 3, y: 1 }, 
+            { id: '11B', x: 4, y: 1 },
+            { id: '11C', x: 5, y: 1 }, 
+            { id: '11S', x: 6, y: 1 },
+            { id: '13', x: 7, y: 1 }, 
+            { id: '12', x: 8, y: 1 },
+            { id: '14', x: 9, y: 1 },   
+        ];
+
+        const enemiesMap2 = [
+            { id: 'Inf Sect', x: 42, y: 27 },
+            { id: 'TH-400', x: 42, y: 28 },
+            { id: 'BTR', x: 44, y: 38 },
+            { id: 'BTR', x: 49, y: 37 },
+            { id: 'BTR', x: 40, y: 57 },
+            { id: 'ATGM Sect', x: 43, y: 63 },
+            { id: 'HMG', x: 37, y: 69 },
+            { id: 'Inf Pl', x: 42, y: 70 }
+        ];
+
+        const enemiesMap3 = [
+            { id: 'Inf Sect', x: 2, y: 2 },
+            { id: 'E2', x: 4, y: 6 }
+        ];
+
+        const obstaclesMap2 = [
+            { id: '1.10C-MC', x: 42, y: 26 },
+            { id: '2.Abattis', x: 44, y: 37 },
+            { id: '3.10C', x: 49, y: 36 },
+            { id: '4.MC', x: 39, y: 56 },
+            { id: '5.10C-MC', x: 43, y: 62 },
+            { id: '6.10C', x: 39, y: 69 },
+            { id: '7. MC', x: 41, y: 73 }
+        ];
+
+        const obstaclesMap3 = [
+            { id: 'Obstacle1', x: 10, y: 10 },
+            { id: 'Obstacle2', x: 15, y: 15 }
+        ];
+
+        // Global GM flag
+        const isGM = () => {
+            const unitSelect = document.getElementById('unitSelect');
+            return unitSelect && unitSelect.value === 'GM';
+        };
+ // Set to `true` for GM, `false` for normal players
+
+        let selectedUnit = unitsMap2[0].id; // Default to first unit
+        let activeMap = 'map2'; // Start with Sit Map
+
+        // Populate Dropdown
+        const populateDropdown = () => {
+            const unitSelect = document.getElementById('unitSelect');
+            unitSelect.innerHTML = ''; // Clear existing options
+
+            const activeUnits = activeMap === 'map2' ? unitsMap2 : unitsMap3;
+
+            // Add other units
+            activeUnits.forEach(unit => {
+                const option = document.createElement('option');
+                option.value = unit.id;
+                option.textContent = `Unit ${unit.id}`;
+                unitSelect.appendChild(option);
+            });
+
+            // Add GM as the last option
+            const gmOption = document.createElement('option');
+                gmOption.value = 'GM';
+                gmOption.textContent = 'Observer';
+                unitSelect.appendChild(gmOption);
+            };
+
+        // Modify selectUnit to Handle GM Selection
+        const selectUnit = (event) => {
+            const selected = event.target.value;
+
+            if (selected === 'GM') {
+                console.log('GM Mode Activated');
+                selectedUnit = null; // No specific unit is selected
+            } else {
+                selectedUnit = selected;
+                console.log(`Selected Unit: ${selectedUnit}`);
+            }
+
+            const activeUnits = activeMap === 'map2' ? unitsMap2 : unitsMap3;
+            const activeEnemies = activeMap === 'map2' ? enemiesMap2 : enemiesMap3;
+            const activeObstacles = activeMap === 'map2' ? obstaclesMap2 : obstaclesMap3;
+            const activeTerrain = activeMap === 'map2' ? terrain2 : terrain3;
+
+            drawGrid(activeMap === 'map2' ? map2 : map3, activeTerrain, activeUnits, activeEnemies, activeObstacles);
+        };
+
+        // Update Event Listeners
+        document.getElementById('unitSelect').addEventListener('change', () => {
+            console.log(`Dropdown selected: ${document.getElementById('unitSelect').value}`);
+            console.log(`Is GM Mode: ${isGM()}`);
+
+            // Handle selection
+            const selected = document.getElementById('unitSelect').value;
+            if (selected === 'GM') {
+                console.log('GM Mode Activated');
+                selectedUnit = null; // No specific unit selected
+            } else {
+                selectedUnit = selected;
+                console.log(`Selected Unit: ${selectedUnit}`);
+            }
+
+            // Redraw grid
+            const activeUnits = activeMap === 'map2' ? unitsMap2 : unitsMap3;
+            const activeEnemies = activeMap === 'map2' ? enemiesMap2 : enemiesMap3;
+            const activeObstacles = activeMap === 'map2' ? obstaclesMap2 : obstaclesMap3;
+            const activeTerrain = activeMap === 'map2' ? terrain2 : terrain3;
+
+            drawGrid(activeMap === 'map2' ? map2 : map3, activeTerrain, activeUnits, activeEnemies, activeObstacles);
+        });
+
+        // Initial Call to Populate Dropdown
+        populateDropdown();
+
+        
+        // Define visibility parameters
+        const visibilityConfig = {
+            map2: {
+                defaultRange: 3, // Default visibility range for units on map2
+                unitRanges: {
+                    '11A': 3,  // Unit-specific range overrides
+                    '11M': 3
+                }
+            },
+            map3: {
+                defaultRange: 3, // Default visibility range for units on map3
+                unitRanges: {
+                    '13': 4
+                }
+            }
+        };
+        
+        const debounce = (func, delay) => {
+        let debounceTimer;
+        return function() {
+            const context = this;
+            const args = arguments;
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => func.apply(context, args), delay);
+        };
+        };
+
+        const getVisibilityRange = (unitId, mapId) => {
+            const config = visibilityConfig[mapId];
+            return config.unitRanges[unitId] || config.defaultRange;
+        };
+
+        // Draw Grid
+        const drawGrid = (container, terrain, units, enemies = [], obstacles = []) => {
+            container.innerHTML = '';
+            terrain.forEach((row, y) => {
+                row.forEach((cell, x) => {
+                    const div = document.createElement('div');
+                    div.className = `cell terrain-${cell}`;
+
+                    // Draw units
+                    const unit = units.find(u => u.x === x && u.y === y);
+                    if (unit) {
+                        div.classList.add('unit');
+                        if (unit.id === selectedUnit) {
+                            div.style.border = '2px solid yellow'; // Highlight selected unit
+                        }
+                    }
+
+                    // Proximity Check for Each Enemy (Radial)
+                    enemies.forEach(enemy => {
+                        if (enemy.x === x && enemy.y === y) {
+                            const isVisible = units.some(unit => {
+                                if (isGM()) return true;
+                                else {
+                                const range = getVisibilityRange(unit.id, activeMap);
+                                const dx = unit.x - enemy.x;
+                                const dy = unit.y - enemy.y;
+                                return Math.sqrt(dx * dx + dy * dy) <= range};
+                            });
+
+                            if (isVisible) {
+                                div.classList.add('enemy', 'revealed'); // Visible enemy
+                            } else {
+                                div.classList.add('enemy', 'hidden-enemy'); // Hidden by fog
+                            }
+                        }
+                    });
+
+                    // Proximity Check for Each Obstacle (Radial)
+                    obstacles.forEach(obstacle => {
+                        if (obstacle.x === x && obstacle.y === y) {
+                            const isVisible = units.some(unit => {
+                                if (isGM()) return true;
+                                else {
+                                const range = getVisibilityRange(unit.id, activeMap);
+                                const dx = unit.x - obstacle.x;
+                                const dy = unit.y - obstacle.y;
+                                return Math.sqrt(dx * dx + dy * dy) <= range};
+                            });
+
+                            if (isVisible) {
+                                div.classList.add('obstacle', 'revealed'); // Visible obstacle
+                            } else {
+                                div.classList.add('obstacle', 'hidden-obstacle'); // Hidden by fog
+                            }
+                        }
+                    });
+
+                    container.appendChild(div);
+                });
+            });
+        };
+
+        // Map References
+        const map2 = document.getElementById('map2');
+        const map3 = document.getElementById('map3');
+
+    // Initial Draw Calls
+        drawGrid(map2, terrain2, unitsMap2, enemiesMap2, obstaclesMap2);
+        drawGrid(map3, terrain3, unitsMap3, enemiesMap3, obstaclesMap3);
+
+        // Toggle Maps
+        const toggleMap = (mapId) => {
+            activeMap = mapId;
+            map2.style.display = mapId === 'map2' ? 'grid' : 'none';
+            map3.style.display = mapId === 'map3' ? 'grid' : 'none';
+
+            populateDropdown();
+            const activeUnits = activeMap === 'map2' ? unitsMap2 : unitsMap3;
+            const activeEnemies = activeMap === 'map2' ? enemiesMap2 : enemiesMap3;
+            const activeObstacles = activeMap === 'map2' ? obstaclesMap2 : obstaclesMap3;
+            const activeTerrain = activeMap === 'map2' ? terrain2 : terrain3;
+
+            drawGrid(activeMap === 'map2' ? map2 : map3, activeTerrain, activeUnits, activeEnemies, activeObstacles);
+        };
+
+        // Unit Selection from Dropdown
+        /*const selectUnit = (event) => {
+            selectedUnit = event.target.value;
+            
+            console.log(`Selected Unit: ${selectedUnit}`);
+
+            const activeUnits = activeMap === 'map2' ? unitsMap2 : unitsMap3;
+            const activeEnemies = activeMap === 'map2' ? enemiesMap2 : enemiesMap3;
+            const activeObstacles = activeMap === 'map2' ? obstaclesMap2 : obstaclesMap3;
+            const activeTerrain = activeMap === 'map2' ? terrain2 : terrain3;
+
+            drawGrid(activeMap === 'map2' ? map2 : map3, activeTerrain, activeUnits, activeEnemies, activeObstacles);
+        };*/
+
+        // Unit Movement (QWEASDZXC)
+        const handleMovement = (event) => {
+            const key = event.key.toLowerCase();
+            const activeUnits = activeMap === 'map2' ? unitsMap2 : unitsMap3;
+            const activeEnemies = activeMap === 'map2' ? enemiesMap2 : enemiesMap3;
+            const activeObstacles = activeMap === 'map2' ? obstaclesMap2 : obstaclesMap3;
+            const activeTerrain = activeMap === 'map2' ? terrain2 : terrain3;
+
+            const unit = activeUnits.find(u => u.id === selectedUnit);
+            let { x, y } = unit;
+
+            const movementMap = {
+                'w': { dx: 0, dy: -1 },
+                'x': { dx: 0, dy: 1 },
+                'a': { dx: -1, dy: 0 },
+                'd': { dx: 1, dy: 0 },
+                'q': { dx: -1, dy: -1 },
+                'e': { dx: 1, dy: -1 },
+                'z': { dx: -1, dy: 1 },
+                'c': { dx: 1, dy: 1 }
+            };
+
+            if (movementMap[key]) {
+                const { dx, dy } = movementMap[key];
+                const newX = x + dx;
+                const newY = y + dy;
+
+                if (
+                    newX >= 0 && newX < activeTerrain[0].length &&  // Ensure newX is within the column range
+                    newY >= 0 && newY < activeTerrain.length && // Ensure newY is within the row range
+                    activeTerrain[newY] && 
+                    activeTerrain[newY][newX] === 0 // Check for valid terrain
+                ) {
+                    unit.x = newX;
+                    unit.y = newY;
+
+                    gameevent.publish('test-event', {type:'blue-move', data: {unit: selectedUnit, x: unit.x, y: unit.y }});
+
+
+                    // Collision with enemies
+                    const enemy = activeEnemies.find(e => e.x === newX && e.y === newY);
+                    if (enemy) {
+                        console.log(`Unit ${selectedUnit} destroyed Enemy ${enemy.id}`);
+                        activeEnemies.splice(activeEnemies.indexOf(enemy), 1);
+                        gameevent.publish('test-event', { type: 'enemy-removed', data: { enemyId: enemy.id } });
+                        }
+                    
+                    
+                    // Collision with obstacles
+                    const obstacle = activeObstacles.find(o => o.x === newX && o.y === newY);
+                    if (obstacle) {
+                        console.log(`Unit ${selectedUnit} has breached ${obstacle.id}`);
+                        activeObstacles.splice(activeObstacles.indexOf(obstacle), 1);
+                        gameevent.publish('test-event', { type: 'obstacle-removed', data: { obstacleId: obstacle.id } });
+                        }
+                }
+            }
+            
+
+            // Re-draw the grid
+            drawGrid(activeMap === 'map2' ? map2 : map3, activeTerrain, activeUnits, activeEnemies, activeObstacles)
+        };
+        
+
+        const handleGMEnemyMovement = (event) => {
+            if (!isGM()) return; // Only GM can control enemies
+            const key = event.key.toLowerCase();
+            const enemy = enemiesMap2[0]; // Example: controlling the first enemy
+            let { x, y } = enemy;
+
+            const movementMap = {
+                'w': { dx: 0, dy: -1 },
+                'x': { dx: 0, dy: 1 },
+                'a': { dx: -1, dy: 0 },
+                'd': { dx: 1, dy: 0 },
+                'q': { dx: -1, dy: -1 },
+                'e': { dx: 1, dy: -1 },
+                'z': { dx: -1, dy: 1 },
+                'c': { dx: 1, dy: 1 }
+            };
+
+            if (movementMap[key]) {
+                const { dx, dy } = movementMap[key];
+                const newX = x + dx;
+                const newY = y + dy;
+
+                // Ensure movement stays within terrain boundaries
+                if (newX >= 0 && newX < terrain2[0].length && newY >= 0 && newY < terrain2.length) {
+                    enemy.x = newX;
+                    enemy.y = newY;
+
+                    console.log(`Enemy moved to (${newX}, ${newY})`);
+
+                    // Broadcast movement
+                    gameevent.publish('test-event', {
+                        type: 'enemy-move',
+                        data: { enemyId: enemy.id, x: newX, y: newY }
+                    });
+
+                    // Redraw grid
+                    drawGrid(map2, terrain2, unitsMap2, enemiesMap2, obstaclesMap2);
+                }
+            }
+        };
+
+        // Event Listeners
+        document.addEventListener('keydown', debounce(handleMovement, 100));
+        populateDropdown();
+
+        // Listen for Events
+        gameevent.subscribe('test-event', (message) => {
+            const { type, data } = message.data;
+
+            if (type === 'blue-move') {
+                // Find the unit in the active map's unit array
+                const activeUnits = activeMap === 'map2' ? unitsMap2 : unitsMap3;
+                const activeEnemies = activeMap === 'map2' ? enemiesMap2 : enemiesMap3;
+                const activeObstacles = activeMap === 'map2' ? obstaclesMap2 : obstaclesMap3;
+                const activeTerrain = activeMap === 'map2' ? terrain2 : terrain3;
+
+                const unit = activeUnits.find(u => u.id === data.unit);
+                if (unit) {
+                    // Update the unit's position
+                    unit.x = data.x;
+                    unit.y = data.y;
+                    // Redraw the grid for the active map
+                    drawGrid(activeMap === 'map2' ? map2 : map3, activeTerrain, activeUnits, activeEnemies, activeObstacles);
+                    }
+                else {
+                    console.warn(`Unit ${data.unit} not found in ${activeMap}`);
+                }
+            }
+
+            else if (type === 'enemy-move') {
+                const enemies = enemiesMap2.find(e => e.id === data.enemyId);
+                if (enemies) {
+                    enemies.x = data.x;
+                    enemies.y = data.y;
+                    // Redraw the grid for the active map
+                    drawGrid(activeMap === 'map2' ? map2 : map3, activeTerrain, activeUnits, activeEnemies, activeObstacles);
+                } 
+                else {
+                    console.warn(`Enemy ${data.enemyId} not found in ${activeMap}`);
+                }
+            }
+
+            else if (type === 'enemy-removed') {
+            const activeEnemies = activeMap === 'map2' ? enemiesMap2 : enemiesMap3;
+            const enemyIndex = activeEnemies.findIndex(e => e.id === data.enemyId);
+            if (enemyIndex !== -1) {
+                activeEnemies.splice(enemyIndex, 1); // Remove enemy locally
+                if (isGM()) {console.log(`Enemy ${data.enemyId} destroyed.`);}
+                }
+            }
+
+
+            else if (type === 'obstacle-removed') {
+                const activeObstacles = activeMap === 'map2' ? obstaclesMap2 : obstaclesMap3;
+                const obstacleIndex = activeObstacles.findIndex(o => o.id === data.obstacleId);
+                if (obstacleIndex !== -1) {
+                    activeObstacles.splice(obstacleIndex, 1); // Remove obstacle locally
+                    if (isGM()) {console.log(`Obstacle ${data.obstacleId} breached.`);}
+                }
+            }
+        });
+
+
+
+    /*
+
+            if (isGM()) {
+            console.log("GM Mode: Subscribing to gmupdates...");
+            gmupdates.subscribe('test-event', (message) => {
+                const { type, data } = message.data;
+
+                // Logs for GM
+                if (type === 'blue-move') {
+                    console.log(`[GM LOG] Unit ${data.unit} moved to (${data.x}, ${data.y})`);
+                } else if (type === 'enemy-move') {
+                    console.log(`[GM LOG] Enemy ${data.enemyId} moved to (${data.x}, ${data.y})`);
+                } else if (type === 'engagement') {
+                    console.log(`[GM LOG] Engagement: Unit ${data.unit} destroyed enemy ${data.enemy} at (${data.x}, ${data.y})`);
+                } else if (type === 'breach-obs') {
+                    console.log(`[GM LOG] Breach: Unit ${data.unit} breached obstacle ${data.obstacle} at (${data.x}, ${data.y})`);
+                }
+            });
+        }
+    // Create a test channel
+    const testChannel = ably.channels.get('test-channel');
+
+    // Publish a message to the test channel
+    testChannel.publish('test-event', { text: 'Hello, Ably!' }, (err) => {
+        if (err) {
+            console.error('Failed to publish message:', err);
+        } else {
+            console.log('Message published successfully!');
+        }
+        });
+
+    // Subscribe to the test channel
+    testChannel.subscribe('test-event', (message) => {
+        console.log('TestChannel:', message.data);
+        const unit = unitsMap2.find(u => u.id === message.data.unit);
+        if (unit) {
+            unit.x = message.data.x;
+            unit.y = message.data.y;
+            
+            console.log('Grid redrawn after move');
+        }
+    });
+
+    if (isGM()) {
+        gameevent.subscribe('test-event', (message) => {
+            const { type, data } = message.data;
+
+            if (type === 'unit-move') {
+                console.log(`Received unit move: ${data.unit} moved to (${data.x}, ${data.y})`);
+            } else if (type === 'enemy-move') {
+                const enemy = enemiesMap2.find(e => e.id === data.enemyId);
+                if (enemy) {
+                    enemy.x = data.x;
+                    enemy.y = data.y;
+                    console.log(`Enemy ${data.enemyId} moved to (${data.x}, ${data.y})`);
+                }
+            }
+
+            // Redraw grid for any changes
+            drawGrid(map2, terrain2, unitsMap2, enemiesMap2, obstaclesMap2);
+        });
+    }*/
+
+
+    
+
+
+    </script>
+
+
+</body>
+</html>
